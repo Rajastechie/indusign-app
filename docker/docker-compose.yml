@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # Frontend Electron Application
+  indusign-frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/Dockerfile
+    container_name: indusign-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - ELECTRON_DISABLE_SECURITY_WARNINGS=true
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+    volumes:
+      - ../shared:/app/shared:ro
+      - ../uploads:/app/uploads
+      - ../downloads:/app/downloads
+    networks:
+      - indusign-network
+    restart: unless-stopped
+    depends_on:
+      - indusign-backend
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('Frontend health check passed')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Backend API Service
+  indusign-backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: indusign-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:password@indusign-db:5432/indusign
+      - JWT_SECRET=your-super-secret-jwt-key-change-in-production
+      - REDIS_URL=redis://indusign-redis:6379
+    volumes:
+      - ../shared:/app/shared
+      - ../uploads:/app/uploads
+      - ../downloads:/app/downloads
+    networks:
+      - indusign-network
+    restart: unless-stopped
+    depends_on:
+      - indusign-db
+      - indusign-redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # PostgreSQL Database
+  indusign-db:
+    image: postgres:15-alpine
+    container_name: indusign-db
+    environment:
+      - POSTGRES_DB=indusign
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - indusign-postgres-data:/var/lib/postgresql/data
+      - ../backend/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - indusign-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis Cache
+  indusign-redis:
+    image: redis:7-alpine
+    container_name: indusign-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - indusign-redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - indusign-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Nginx Reverse Proxy
+  indusign-nginx:
+    image: nginx:alpine
+    container_name: indusign-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./nginx/logs:/var/log/nginx
+    networks:
+      - indusign-network
+    restart: unless-stopped
+    depends_on:
+      - indusign-frontend
+      - indusign-backend
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  indusign-postgres-data:
+    driver: local
+  indusign-redis-data:
+    driver: local
+
+networks:
+  indusign-network:
+    driver: bridge 
